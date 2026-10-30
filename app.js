@@ -56,7 +56,7 @@
   async function save(item) {
     item.updatedAt = Date.now();
     state.items.set(item.id, item);
-    await DB.put(item);
+    try { await DB.put(item); } catch { /* storage blocked: keep it in memory */ }
   }
 
   // ---------- dialog ----------
@@ -173,19 +173,34 @@
     const d = await ask('Delete?', `<p>Permanently delete <strong>${esc(item.name)}</strong>${extra}? This can't be undone.</p>`, 'Delete');
     if (!d) return;
     const ids = [item.id, ...inner.map(i => i.id)];
-    await DB.remove(ids);
+    try { await DB.remove(ids); } catch { /* storage blocked */ }
     ids.forEach(id => state.items.delete(id));
     if (ids.includes(state.current)) state.current = item.parentId || drawers()[0]?.id || null;
     render();
   }
 
-  function download(doc) {
-    const blob = doc.blob || new Blob([doc.text ?? ''], { type: 'text/plain' });
+  // Inside a claude.ai page, downloads go through the viewer's save prompt;
+  // in a normal browser tab a plain link click works.
+  async function saveFile(filename, blob) {
+    const downloads = window.claude?.use ? await window.claude.use('downloads') : null;
+    if (downloads) {
+      try { await downloads.save({ filename, data: blob }); }
+      catch (err) {
+        if (err?.code === 'rejected_extension') toast('This file type can’t be downloaded here');
+        else if (err?.code !== 'declined') toast('Download isn’t available here');
+      }
+      return;
+    }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = doc.blob ? doc.name : `${doc.name}.txt`;
+    a.download = filename;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  function download(doc) {
+    if (doc.blob) saveFile(doc.name, doc.blob);
+    else saveFile(`${doc.name}.txt`, new Blob([doc.text ?? ''], { type: 'text/plain' }));
   }
 
   // ---------- viewer ----------
@@ -361,11 +376,7 @@
       items.push(copy);
     }
     const blob = new Blob([JSON.stringify({ app: 'filing-cabinet', version: 1, exportedAt: new Date().toISOString(), items })], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `filing-cabinet-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    saveFile(`filing-cabinet-backup-${new Date().toISOString().slice(0, 10)}.json`, blob);
   }
 
   async function importAll(file) {
@@ -374,7 +385,7 @@
     if (data?.app !== 'filing-cabinet' || !Array.isArray(data.items)) { toast('That file isn’t a Filing Cabinet backup'); return; }
     const items = await Promise.all(data.items.map(async it => (
       typeof it.blob === 'string' ? { ...it, blob: await (await fetch(it.blob)).blob() } : it)));
-    await DB.putMany(items);
+    try { await DB.putMany(items); } catch { /* storage blocked */ }
     items.forEach(it => state.items.set(it.id, it));
     toast(`Restored ${items.length} items`);
     if (!state.current) state.current = drawers()[0]?.id || null;
@@ -467,7 +478,11 @@
 
   // ---------- boot ----------
   (async () => {
-    (await DB.all()).forEach(it => state.items.set(it.id, it));
+    try {
+      (await DB.all()).forEach(it => state.items.set(it.id, it));
+    } catch {
+      toast('This browser is blocking storage, so files won’t be kept after you close the page');
+    }
     state.current = drawers()[0]?.id || null;
     render();
   })();
