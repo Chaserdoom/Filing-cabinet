@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Filing Cabinet</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <button id="menuBtn" class="icon-btn mobile-only" aria-label="Show drawers">☰</button>
+    <h1 class="brand">🗄️ Filing Cabinet</h1>
+    <div class="search">
+      <input id="search" type="search" placeholder="Search all files, folders, tags…" autocomplete="off">
+    </div>
+    <div class="top-actions">
+      <button id="exportBtn" class="btn ghost" title="Download a backup of everything">Export</button>
+      <label class="btn ghost" title="Restore from a backup file">
+        Import<input id="importInput" type="file" accept=".json,application/json" hidden>
+      </label>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside id="cabinet" class="cabinet" aria-label="Drawers">
+      <div class="cabinet-body">
+        <ul id="drawerList" class="drawers"></ul>
+        <button id="addDrawerBtn" class="drawer add-drawer">+ New drawer</button>
+      </div>
+      <div class="cabinet-feet"><span></span><span></span></div>
+    </aside>
+
+    <main class="main">
+      <nav id="breadcrumbs" class="breadcrumbs" aria-label="Location"></nav>
+      <div id="toolbar" class="toolbar"></div>
+      <section id="content" class="content"></section>
+      <div id="dropHint" class="drop-hint" hidden>Drop files to file them here</div>
+    </main>
+  </div>
+
+  <input id="fileInput" type="file" multiple hidden>
+
+  <dialog id="dialog" class="dialog">
+    <form id="dialogForm" method="dialog">
+      <h2 id="dialogTitle"></h2>
+      <div id="dialogBody"></div>
+      <menu class="dialog-actions">
+        <button type="button" id="dialogCancel" class="btn ghost">Cancel</button>
+        <button id="dialogOk" value="ok" class="btn primary">OK</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="viewer" class="viewer">
+    <div class="viewer-head">
+      <div>
+        <h2 id="viewerTitle"></h2>
+        <div id="viewerMeta" class="muted"></div>
+      </div>
+      <div class="viewer-actions">
+        <button id="viewerEdit" class="btn ghost">Details</button>
+        <button id="viewerDownload" class="btn ghost">Download</button>
+        <button id="viewerClose" class="icon-btn" aria-label="Close">✕</button>
+      </div>
+    </div>
+    <div id="viewerBody" class="viewer-body"></div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <script src="db.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
