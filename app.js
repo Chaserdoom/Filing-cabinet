@@ -45,6 +45,17 @@
     return '📎';
   }
 
+  // Object URLs for image thumbnails, made once per image and freed on delete.
+  const thumbs = new Map();
+  function thumb(doc) {
+    if (!doc.blob || !(doc.mime || '').startsWith('image/')) return null;
+    if (!thumbs.has(doc.id)) thumbs.set(doc.id, URL.createObjectURL(doc.blob));
+    return thumbs.get(doc.id);
+  }
+  function dropThumb(id) {
+    if (thumbs.has(id)) { URL.revokeObjectURL(thumbs.get(id)); thumbs.delete(id); }
+  }
+
   function toast(msg) {
     const t = $('#toast');
     t.textContent = msg;
@@ -113,10 +124,19 @@
 
   const parseTags = s => [...new Set((s || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean))];
 
+  // With no drawer yet, files land in an "Inbox" drawer instead of being refused.
+  async function inboxDrawer() {
+    const existing = drawers().find(d => d.name === 'Inbox');
+    if (existing) return existing.id;
+    const item = { id: uid(), kind: 'drawer', parentId: null, name: 'Inbox', color: '#2471a3', order: Date.now(), createdAt: Date.now() };
+    await save(item);
+    return item.id;
+  }
+
   async function addFiles(fileList, parentId = state.current) {
-    if (!parentId) { toast('Open a drawer first'); return; }
     const files = [...fileList];
     if (!files.length) return;
+    if (!parentId) { parentId = await inboxDrawer(); state.current = parentId; }
     for (const f of files) {
       await save({ id: uid(), kind: 'doc', parentId, name: f.name, mime: f.type || 'application/octet-stream', size: f.size, blob: f, tags: [], note: '', createdAt: Date.now() });
     }
@@ -174,7 +194,7 @@
     if (!d) return;
     const ids = [item.id, ...inner.map(i => i.id)];
     try { await DB.remove(ids); } catch { /* storage blocked */ }
-    ids.forEach(id => state.items.delete(id));
+    ids.forEach(id => { state.items.delete(id); dropThumb(id); });
     if (ids.includes(state.current)) state.current = item.parentId || drawers()[0]?.id || null;
     render();
   }
@@ -267,6 +287,7 @@
     const cur = state.items.get(state.current);
     tb.innerHTML = `
       <button class="btn primary" data-act="upload">⬆ Add files</button>
+      <button class="btn" data-act="photos">🖼️ Add photos</button>
       <button class="btn" data-act="folder">📁 New folder</button>
       <button class="btn" data-act="note">📝 New note</button>
       <span class="spacer"></span>
@@ -296,7 +317,7 @@
   };
 
   const docRow = (d, showPath) => `<div class="doc" data-view="${d.id}" draggable="true" data-drag="${d.id}" tabindex="0">
-      <span class="doc-icon">${docIcon(d)}</span>
+      ${thumb(d) ? `<img class="doc-thumb" src="${thumb(d)}" alt="" loading="lazy">` : `<span class="doc-icon">${docIcon(d)}</span>`}
       <span class="doc-main">
         <span class="doc-name">${esc(d.name)}</span>
         <span class="muted small">${showPath ? esc(path(d.parentId).map(p => p.name).join(' › ')) + ' · ' : ''}${fmtSize(d.size)} · ${fmtDate(d.createdAt)}</span>
@@ -322,14 +343,14 @@
       return;
     }
     if (!state.current) {
-      c.innerHTML = `<div class="empty"><div class="big">🗄️</div><h2>Your cabinet is empty</h2><p>Start by adding a drawer — something like “Taxes”, “Medical”, or “Home”.</p><button class="btn primary" data-act="drawer">+ New drawer</button></div>`;
+      c.innerHTML = `<div class="empty"><div class="big">🗄️</div><h2>Your cabinet is empty</h2><p>Add a drawer for each part of life, like “Taxes”, “Medical” or “Home”. Or start adding files and they’ll go in an Inbox drawer.</p><div class="empty-actions"><button class="btn primary" data-act="drawer">+ New drawer</button><button class="btn" data-act="upload">⬆ Add files</button><button class="btn" data-act="photos">🖼️ Add photos</button></div><p class="muted small">You can also drag files here or paste a screenshot.</p></div>`;
       return;
     }
     const kids = children(state.current);
     const folders = sortItems(kids.filter(k => k.kind === 'folder'));
     const docs = sortItems(kids.filter(k => k.kind === 'doc'));
     if (!kids.length) {
-      c.innerHTML = `<div class="empty"><div class="big">📂</div><p>This ${state.items.get(state.current).kind} is empty.</p><p class="muted">Drag files here, or use the buttons above.</p></div>`;
+      c.innerHTML = `<div class="empty"><div class="big">📂</div><p>This ${state.items.get(state.current).kind} is empty.</p><div class="empty-actions"><button class="btn primary" data-act="upload">⬆ Add files</button><button class="btn" data-act="photos">🖼️ Add photos</button></div><p class="muted small">You can also drag files here or paste a screenshot.</p></div>`;
       return;
     }
     c.innerHTML = `${folders.length ? `<div class="folders">${folders.map(folderCard).join('')}</div>` : ''}${docs.length ? `<div class="docs">${docs.map(d => docRow(d, false)).join('')}</div>` : ''}`;
@@ -403,6 +424,7 @@
     if (tag) { e.stopPropagation(); $('#search').value = tag.dataset.tag; state.query = tag.dataset.tag; render(); return; }
     const act = t.closest('[data-act]')?.dataset.act;
     if (act === 'upload') return $('#fileInput').click();
+    if (act === 'photos') return $('#photoInput').click();
     if (act === 'folder') return newFolder();
     if (act === 'note') return newNote();
     if (act === 'drawer') return newDrawer();
@@ -426,6 +448,19 @@
   $('#addDrawerBtn').onclick = newDrawer;
   $('#menuBtn').onclick = () => document.body.classList.toggle('show-cabinet');
   $('#fileInput').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+  $('#photoInput').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+
+  // Paste screenshots or copied files anywhere outside a text field.
+  document.addEventListener('paste', e => {
+    if (e.target.matches?.('input, textarea') || document.querySelector('dialog[open]')) return;
+    const files = [...(e.clipboardData?.files || [])];
+    if (!files.length) return;
+    e.preventDefault();
+    const stamp = new Date().toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).replace(/[/:]/g, '-');
+    addFiles(files.map((f, i) => /^image\.\w+$/.test(f.name)
+      ? new File([f], `Pasted image ${stamp}${files.length > 1 ? ` (${i + 1})` : ''}.${f.name.split('.').pop()}`, { type: f.type })
+      : f));
+  });
   $('#search').oninput = e => { state.query = e.target.value.trim(); render(); };
   $('#exportBtn').onclick = exportAll;
   $('#importInput').onchange = e => { if (e.target.files[0]) importAll(e.target.files[0]); e.target.value = ''; };
